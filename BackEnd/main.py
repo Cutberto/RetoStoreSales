@@ -4,7 +4,8 @@ import os
 import shutil
 import time
 import traceback
-
+from xml.etree.ElementTree import tostringlist
+import flask
 from flask import Flask, request, jsonify, render_template, session, redirect
 import pandas as pd
 import joblib
@@ -19,9 +20,13 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
+from flask_cors import CORS, cross_origin
 
-
+import numpy as np
 app = Flask(__name__,template_folder='template')
+cors = CORS(app)
+app.config['CORS_HEADERS'] = 'Content-Type'
+
 
 # se definen los inputs
 training_data = 'data/titanic.csv'
@@ -125,9 +130,16 @@ def wipe():
         return 'Could not remove and recreate the model directory'
 
 # Pruebas
-@app.route('/')
+@app.route('/lineal')
 def trans():
-    global df_train, df_he, df_test
+    #global df_train, df_he, df_test
+    df_transactions = pd.read_csv('data/transactions.csv').sort_values(['store_nbr', 'date'])
+    df_train = pd.read_csv('data/train.csv')
+    df_test = pd.read_csv('data/test.csv')
+    df_holidays = pd.read_csv('data/holidays_events.csv')
+    df_oil = pd.read_csv('data/oil.csv')
+    df_submission = pd.read_csv('data/sample_submission.csv')
+    df_stores = pd.read_csv('data/stores.csv')
 
     df_train['date'] = pd.to_datetime(df_train['date'])
     df_test['date'] = pd.to_datetime(df_test['date'])
@@ -143,7 +155,7 @@ def trans():
     df_train=df_train.drop(df_fd)
 
     df_dates = df_train.groupby(df_train.date)['sales'].mean().reset_index()
-    df_dates.plot(kind = 'scatter', x = 'date', y = 'sales')
+   
 
     df_dates = df_train.groupby(df_train.date)['sales'].mean().reset_index()
 
@@ -204,11 +216,16 @@ def trans():
     # y_pred = pd.DataFrame(model.predict(X), index=X.index, columns=y.columns)
 
     X_test = dp.out_of_sample(steps=16)
+
     X_test.index.name='date'
+
     y_submit = model.predict(X_test)
+
     y_submit = pd.DataFrame(y_submit, index=X_test.index,
                        columns=y.columns)
+
     y_submit = y_submit.stack(['store_nbr', 'family'])
+    
     y_submit['id'] = y_submit['id'].astype(int)
 
     y_submit = y_submit.reset_index()
@@ -222,11 +239,164 @@ def trans():
 
     y_submit = pd.merge(y_submit, df_test, on="level_0")
     y_submit = y_submit[['date_x','sales']]
-    # y_submit.columns = y_submit.columns.str.replace('id_y', 'id')
+   
+    result_list = y_submit["sales"].tolist()
 
 
-    # return len(y_pred)
-    return render_template('main.html',  tables=[y_submit.to_html(classes='data')], titles=y_submit.columns.values)
+
+    y_submit["date_x"] = y_submit["date_x"].values.astype('datetime64[ns]')
+    #y_submit["date_x"] = y_submit["date_x"].dt.strftime("%m/%d/%Y")
+
+    y_submit = y_submit.groupby(['date_x']).sales.sum()
+    #y_submit["date_x"] = y_submit["date_x"].values.astype('datetime64[ns]')
+    #y_submit["date_x"] = y_submit["date_x"].dt.strftime("%m/%d/%Y")
+    print (y_submit)
+    #json_result = y_subm
+    import json
+    json_result = json.dumps(y_submit.to_json())
+    #print(json_result)
+
+ 
+    resp = flask.Response(json_result)
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    resp.headers["Access-Control-Allow-Headers"]= "X-Requested-With"
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
+
+   # return render_template('main.html',  tables=[y_submit.to_html(classes='data')], titles=y_submit.columns.values)
+###########################################
+@app.route('/forest')
+def forest():
+    #global df_train, df_he, df_test
+    df_transactions = pd.read_csv('data/transactions.csv').sort_values(['store_nbr', 'date'])
+    df_train = pd.read_csv('data/train.csv')
+    df_test = pd.read_csv('data/test.csv')
+    df_holidays = pd.read_csv('data/holidays_events.csv')
+    df_oil = pd.read_csv('data/oil.csv')
+    df_submission = pd.read_csv('data/sample_submission.csv')
+    df_stores = pd.read_csv('data/stores.csv')
+
+    df_train['date'] = pd.to_datetime(df_train['date'])
+    df_test['date'] = pd.to_datetime(df_test['date'])
+    df_transactions['date'] = pd.to_datetime(df_transactions['date'])
+
+    df_fd = df_train.loc[(df_train["date"].dt.day == 1) & (df_train["date"].dt.month == 1)].index
+    df_train = df_train.drop(df_fd)
+
+    df_fd=df_train.loc[(df_train["date"].dt.month == 4) & (df_train["date"].dt.day >= 16) & (df_train["date"].dt.day <= 31) & (df_train["date"].dt.year == 2016)].index
+    df_train=df_train.drop(df_fd)
+
+    df_fd=df_train.loc[(df_train["date"].dt.month == 5) & (df_train["date"].dt.day >= 1) & (df_train["date"].dt.day <= 16) & (df_train["date"].dt.year == 2016)].index
+    df_train=df_train.drop(df_fd)
+
+    df_dates = df_train.groupby(df_train.date)['sales'].mean().reset_index()
+   
+
+    df_dates = df_train.groupby(df_train.date)['sales'].mean().reset_index()
+
+    df_train = pd.merge(df_train, df_transactions, on=['date','store_nbr'])
+
+    # df_he
+    df_he = df_holidays.drop(["locale_name", "description", "type"], axis=1)
+
+    df_di=df_he.loc[(df_he["locale"] == 'Regional')].index
+    df_he=df_he.drop(df_di)
+
+    df_di=df_he.loc[(df_he["transferred"] == True)].index
+    df_he=df_he.drop(df_di)
+
+    df_he = df_he.drop(["transferred"], axis=1)
+
+    df_he = df_he.replace(to_replace="Local", value=1)
+    df_he = df_he.replace(to_replace="National", value=1)
+    df_he.columns = df_he.columns.str.replace('locale', 'IsHoliday')
+    df_he["date"] = pd.to_datetime(df_he['date'])
+
+
+    df_train['IsHoliday'] = df_he['IsHoliday']
+    df_train['IsHoliday'] = df_train['IsHoliday'].fillna(0)
+
+    df_train['year'] = ((df_train["date"].dt.year).astype('int')) - 2000
+
+    # X_store = pd.get_dummies(df_train['store_nbr'])
+
+    df_train['date'] = df_train.date.dt.to_period('D')
+
+    df_train = df_train.set_index(['store_nbr', 'family', 'date']).sort_index()
+
+    df_train['id'] = df_train['id'].astype(object)
+
+    # Modelo
+    # average_sales = df_train.groupby('date').mean().sales
+
+    y = df_train.unstack(['store_nbr','family']).loc['2017']
+
+    y = y.fillna(0)
+
+    fourier = CalendarFourier(freq='M', order=4)
+    dp = DeterministicProcess(
+        index=y.index,
+        constant=True,
+        order=1,
+        seasonal=True,
+        additional_terms=[fourier],
+        drop=True,
+    )
+
+    X = dp.in_sample()
+
+    model = RandomForestRegressor()
+    model.fit(X, y)
+
+    # y_pred = pd.DataFrame(model.predict(X), index=X.index, columns=y.columns)
+
+    X_test = dp.out_of_sample(steps=16)
+
+    X_test.index.name='date'
+
+    y_submit = model.predict(X_test)
+
+    y_submit = pd.DataFrame(y_submit, index=X_test.index,
+                       columns=y.columns)
+
+    y_submit = y_submit.stack(['store_nbr', 'family'])
+    
+    y_submit['id'] = y_submit['id'].astype(int)
+
+    y_submit = y_submit.reset_index()
+    y_submit = y_submit.reset_index()
+    y_submit = y_submit.reset_index()
+    df_test = df_test.reset_index()
+    df_test = df_test.reset_index()
+
+    y_submit['level_0'] = y_submit['level_0'].astype(int)
+    df_test['level_0'] = df_test['level_0'].astype(int)
+
+    y_submit = pd.merge(y_submit, df_test, on="level_0")
+    y_submit = y_submit[['date_x','sales']]
+   
+    result_list = y_submit["sales"].tolist()
+
+
+
+    y_submit["date_x"] = y_submit["date_x"].values.astype('datetime64[ns]')
+    #y_submit["date_x"] = y_submit["date_x"].dt.strftime("%m/%d/%Y")
+
+    y_submit = y_submit.groupby(['date_x']).sales.sum()
+    #y_submit["date_x"] = y_submit["date_x"].values.astype('datetime64[ns]')
+    #y_submit["date_x"] = y_submit["date_x"].dt.strftime("%m/%d/%Y")
+    print (y_submit)
+    #json_result = y_subm
+    import json
+    json_result = json.dumps(y_submit.to_json())
+    #print(json_result)
+
+ 
+    resp = flask.Response(json_result)
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    resp.headers["Access-Control-Allow-Headers"]= "X-Requested-With"
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
 
 
 
